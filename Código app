@@ -1,0 +1,406 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  Timestamp 
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  Activity, 
+  ShieldCheck, 
+  ClipboardList, 
+  PlusCircle, 
+  History, 
+  Radio,
+  AlertTriangle,
+  Calendar,
+  Users,
+  Hand,
+  Download,
+  Info
+} from 'lucide-react';
+
+// Firebase configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'medicina-nuclear-v1';
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [ioeLogs, setIoeLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('register');
+  
+  // Form States
+  const [formData, setFormData] = useState({
+    area: '',
+    measurement: '',
+    unit: 'μSv/h',
+    background: '',
+    equipment: '',
+    technician: '',
+    notes: '',
+    date: new Date().toISOString().split('T')[0] // Data manual para área
+  });
+
+  const [ioeData, setIoeData] = useState({
+    name: '',
+    location: '', 
+    rate: '',
+    unit: 'μSv/h',
+    technician: '',
+    date: new Date().toISOString().split('T')[0] // Data manual para IOE
+  });
+
+  // Auth (Rule 3)
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // Data (Rules 1 & 2)
+  useEffect(() => {
+    if (!user) return;
+
+    const logsRef = collection(db, 'artifacts', appId, 'public', 'data', 'daily_logs');
+    const unsubscribeLogs = onSnapshot(query(logsRef), (snapshot) => {
+      const data = snapshot.docs.map(doc => {
+        const docData = doc.data();
+        // Usa a data manual se existir, senão usa o timestamp do Firebase
+        const displayDate = docData.date 
+          ? new Date(docData.date + 'T12:00:00').toLocaleDateString('pt-BR')
+          : docData.timestamp?.toDate().toLocaleDateString('pt-BR');
+
+        return {
+          id: doc.id,
+          ...docData,
+          dateFormatted: displayDate,
+          sortTime: docData.date ? new Date(docData.date).getTime() : docData.timestamp?.toMillis()
+        };
+      }).sort((a, b) => b.sortTime - a.sortTime);
+      setLogs(data);
+    });
+
+    const ioeRef = collection(db, 'artifacts', appId, 'public', 'data', 'ioe_monitor');
+    const unsubscribeIoe = onSnapshot(query(ioeRef), (snapshot) => {
+      const data = snapshot.docs.map(doc => {
+        const docData = doc.data();
+        const displayDate = docData.date 
+          ? new Date(docData.date + 'T12:00:00').toLocaleDateString('pt-BR')
+          : docData.timestamp?.toDate().toLocaleDateString('pt-BR');
+
+        return {
+          id: doc.id,
+          ...docData,
+          dateFormatted: displayDate,
+          sortTime: docData.date ? new Date(docData.date).getTime() : docData.timestamp?.toMillis()
+        };
+      }).sort((a, b) => b.sortTime - a.sortTime);
+      setIoeLogs(data);
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribeLogs();
+      unsubscribeIoe();
+    };
+  }, [user]);
+
+  const showNotification = (message) => {
+    const notification = document.createElement('div');
+    notification.className = "fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl z-50 font-medium text-sm transition-all border border-slate-700";
+    notification.innerText = message;
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), 3000);
+  };
+
+  const handleAreaSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const logsRef = collection(db, 'artifacts', appId, 'public', 'data', 'daily_logs');
+      await addDoc(logsRef, { 
+        ...formData, 
+        userId: user.uid, 
+        timestamp: Timestamp.now() 
+      });
+      setFormData({ 
+        area: '', 
+        measurement: '', 
+        unit: 'μSv/h', 
+        background: '', 
+        equipment: '', 
+        technician: '', 
+        notes: '',
+        date: new Date().toISOString().split('T')[0]
+      });
+      setActiveTab('history');
+      showNotification("Monitoração de área registrada!");
+    } catch (error) { console.error(error); }
+  };
+
+  const handleIoeSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const ioeRef = collection(db, 'artifacts', appId, 'public', 'data', 'ioe_monitor');
+      await addDoc(ioeRef, { 
+        ...ioeData, 
+        userId: user.uid, 
+        timestamp: Timestamp.now() 
+      });
+      setIoeData({ 
+        name: '', 
+        location: '', 
+        rate: '', 
+        unit: 'μSv/h', 
+        technician: '', 
+        date: new Date().toISOString().split('T')[0] 
+      });
+      setActiveTab('history');
+      showNotification("Monitoração de extremidade registrada!");
+    } catch (error) { console.error(error); }
+  };
+
+  const exportData = () => {
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + "Tipo,Data,Local/Area,Profissional,Valor,Unidade\n"
+      + logs.map(l => `Area,${l.dateFormatted},${l.area},${l.technician},${l.measurement},${l.unit}`).join("\n")
+      + "\n"
+      + ioeLogs.map(l => `IOE,${l.dateFormatted},${l.location},${l.name},${l.rate},${l.unit}`).join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "JPONuclear_Export.csv");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const areas = [
+    "Sala de manipulação",
+    "Sala de espera de pacientes injetados",
+    "Sala de administração de radiofármacos",
+    "Sala de rejeitos",
+    "Sala de estresse",
+    "Sala da gama câmara",
+    "Banheiro masculino de pacientes injetados",
+    "Banheiro feminino de pacientes injetados",
+    "Sala de comando da gama câmara"
+  ];
+
+  const NavItem = ({ id, icon: Icon, label }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`flex flex-col items-center justify-center w-full py-2 transition-all ${
+        activeTab === id ? 'text-blue-600 border-t-2 border-blue-600 bg-blue-50/50' : 'text-slate-400'
+      }`}
+    >
+      <Icon size={20} />
+      <span className="text-[10px] mt-1 font-bold uppercase tracking-tight">{label}</span>
+    </button>
+  );
+
+  if (!user) return <div className="flex items-center justify-center min-h-screen font-sans text-slate-500">Iniciando JPONuclear...</div>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-32 font-sans text-slate-900">
+      <header className="bg-slate-900 text-white p-4 shadow-lg sticky top-0 z-30 border-b border-blue-900/30">
+        <div className="max-w-md mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Activity className="text-blue-400" size={22} />
+            <h1 className="text-xl font-black tracking-tighter italic">JPO<span className="text-blue-400 not-italic">NUCLEAR</span></h1>
+          </div>
+          <button onClick={exportData} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors border border-slate-700">
+            <Download size={18} className="text-blue-400" />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-md mx-auto p-4">
+        {activeTab === 'register' && (
+          <div className="space-y-6">
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-slate-50 p-4 border-b flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-slate-800">
+                  <Radio className="text-blue-600" size={18} />
+                  <h2>Monitoração de Áreas</h2>
+                </div>
+              </div>
+              <form onSubmit={handleAreaSubmit} className="p-4 space-y-3">
+                <div className="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm">
+                  <Calendar size={16} className="text-slate-400" />
+                  <input 
+                    required 
+                    type="date" 
+                    className="flex-1 bg-transparent outline-none" 
+                    value={formData.date} 
+                    onChange={e => setFormData({...formData, date: e.target.value})} 
+                  />
+                </div>
+                
+                <select required className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500/20" value={formData.area} onChange={e => setFormData({...formData, area: e.target.value})}>
+                  <option value="">Selecione a área...</option>
+                  {areas.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                
+                <div className="flex gap-2">
+                  <input required type="number" step="0.01" placeholder="Taxa Medida" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500/20" value={formData.measurement} onChange={e => setFormData({...formData, measurement: e.target.value})} />
+                  <select className="p-3 bg-slate-200 border-none rounded-xl font-bold text-xs" value={formData.unit} onChange={e => setFormData({...formData, unit: e.target.value})}>
+                    <option>μSv/h</option>
+                    <option>mR/h</option>
+                  </select>
+                </div>
+                <input required type="text" placeholder="Técnico Responsável" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500/20" value={formData.technician} onChange={e => setFormData({...formData, technician: e.target.value})} />
+                <button className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                  <ShieldCheck size={18} /> Salvar Monitoração
+                </button>
+              </form>
+            </section>
+
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-indigo-50 p-4 border-b border-indigo-100 flex items-center gap-2">
+                <Users className="text-indigo-600" size={18} />
+                <h2 className="font-bold text-indigo-900">Monitoração de IOE</h2>
+              </div>
+              <form onSubmit={handleIoeSubmit} className="p-4 space-y-3">
+                <div className="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm">
+                  <Calendar size={16} className="text-slate-400" />
+                  <input 
+                    required 
+                    type="date" 
+                    className="flex-1 bg-transparent outline-none" 
+                    value={ioeData.date} 
+                    onChange={e => setIoeData({...ioeData, date: e.target.value})} 
+                  />
+                </div>
+
+                <input required type="text" placeholder="Nome do Profissional" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={ioeData.name} onChange={e => setIoeData({...ioeData, name: e.target.value})} />
+                
+                <div className="flex gap-2">
+                  {['Extremidades mãos', 'Extremidades pés'].map((loc) => (
+                    <button 
+                      key={loc}
+                      type="button"
+                      onClick={() => setIoeData({...ioeData, location: loc})}
+                      className={`flex-1 py-3 rounded-xl text-xs font-bold border transition-all ${ioeData.location === loc ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-slate-50 border-slate-200 text-slate-500'}`}
+                    >
+                      {loc === 'Extremidades mãos' ? 'Mãos' : 'Pés'}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <input required type="number" step="0.01" placeholder="Taxa de Exposição" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={ioeData.rate} onChange={e => setIoeData({...ioeData, rate: e.target.value})} />
+                  <select className="p-3 bg-slate-200 border-none rounded-xl font-bold text-xs" value={ioeData.unit} onChange={e => setIoeData({...ioeData, unit: e.target.value})}>
+                    <option>μSv/h</option>
+                    <option>mR/h</option>
+                  </select>
+                </div>
+
+                <input required type="text" placeholder="Técnico Supervisor" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={ioeData.technician} onChange={e => setIoeData({...ioeData, technician: e.target.value})} />
+
+                <button className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                  <Hand size={18} /> Registrar IOE
+                </button>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'history' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest px-2 mb-4">Histórico JPONuclear</h3>
+            {ioeLogs.concat(logs).sort((a,b) => b.sortTime - a.sortTime).map(log => (
+              <div key={log.id} className={`bg-white p-4 rounded-2xl shadow-sm border-l-4 ${log.location ? 'border-indigo-500' : 'border-blue-500'}`}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="font-bold text-slate-800 text-sm">{log.name || log.area}</span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${log.location ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
+                        {log.location || 'Área'}
+                      </span>
+                      <span className="text-[10px] font-medium text-slate-400">{log.dateFormatted}</span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-lg font-black ${log.location ? 'text-indigo-700' : 'text-blue-700'}`}>{log.rate || log.measurement}</span>
+                    <span className="text-[10px] ml-1 font-bold text-slate-400 uppercase">{log.unit}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {logs.length === 0 && ioeLogs.length === 0 && (
+              <div className="text-center py-20 text-slate-300">
+                <History size={48} className="mx-auto mb-2 opacity-20" />
+                <p className="text-sm font-medium">Sem registos no sistema</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'info' && (
+          <div className="space-y-4">
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-2 mb-4">
+                <Info className="text-blue-600" size={20} />
+                <h2 className="font-black text-lg text-slate-800 uppercase tracking-tight">Sobre o JPONuclear</h2>
+              </div>
+              <div className="space-y-4 text-sm text-slate-600 leading-relaxed">
+                <p>O <strong>JPONuclear</strong> é uma plataforma especializada para gestão de radioproteção diária.</p>
+                <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                  <h4 className="font-bold text-blue-800 mb-1">Funcionalidades</h4>
+                  <ul className="text-xs text-blue-700 list-disc ml-4 space-y-1">
+                    <li>Monitorização ambiental de áreas críticas com seleção de data manual.</li>
+                    <li>Controlo de exposição de extremidades para IOE.</li>
+                    <li>Exportação de dados para auditoria em CSV.</li>
+                    <li>Sincronização em tempo real via nuvem.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Footer com Créditos Atualizado */}
+      <footer className="max-w-md mx-auto px-4 pb-6 text-center">
+        <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-loose">
+          Aplicação JPONuclear <br/>
+          Desenvolvida por <br/>
+          <span className="text-slate-600 font-extrabold text-[11px]">Jéssica Pasqueta de Oliveira</span>
+        </p>
+      </footer>
+
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200 flex justify-around p-2 z-40 shadow-[0_-5px_20px_rgba(0,0,0,0.05)]">
+        <NavItem id="register" icon={PlusCircle} label="Novo" />
+        <NavItem id="history" icon={History} label="Histórico" />
+        <NavItem id="info" icon={ClipboardList} label="Manual" />
+      </nav>
+    </div>
+  );
+}
